@@ -48,13 +48,13 @@ int __fastcall main(int argc, const char **argv, const char **envp)
 -  again, first step is always to create a loop, and then overwrite some GOT to loop and execv `system("/bin/sh")`
 - to loop, i aim to overwrite `puts@got` w `main()` addr, since we only use it once at the end and its plt addr is still at binary addr
 - here i choose addr at the beginning of `main()`, it will add more space to overwrite later bco `sprintf`, the data we input from "first name" and "last name" will be modified
-![[goat_1.png]]
-![[goat_2.png]]
-![[goat_3.png]]
+![](../image/goat_1.png)
+![](../image/goat_2.png)
+![](../image/goat_3.png)
 - then leak libc, stack
 - now we need to overwrite 3 LSB of another GOT to trigger `system()` in one go otherwise it will error when loop back
 - but to overwrite 3 bytes, we have to divide into 2 parts: 2 bytes and 1 bytes, plus target addr and target addr + 1/2
-![[goat_4.png]]
+![](../image/goat_4.png)
 - we don't have that much space, so the only solution is to put target addr on stack before overwriting (that's why its necessary to loop from start of `main()` to add space to stack)
 - and finally, overwrite, here i chose `strncmp@got` (i think `snprintf@got` is still fine, havent tested yet), w `system` and set `s1 = /bin/sh\x00`
 - thats all. actually the approach is not too diff, but it took me a looong time to debug and find the solution :(
