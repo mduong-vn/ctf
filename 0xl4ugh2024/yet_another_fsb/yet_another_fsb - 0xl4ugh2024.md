@@ -58,13 +58,13 @@ Dump of assembler code for function main:
 ```
 - we cant overwrite flag, as its at `[rbp-0x2]`
 - check stack
-![[yet_another_fsb_1.png]]
+![](../image/yet_another_fsb_1.png)
 - its also impossible to both leak and write arbitrary in one payload
 - *remind: to write arbitrary, we need to know the target addr, since offset will take that value on stack, use it as an addr to write in*
 - tbh at first i was stuck at how to loop, but then (after looong time) i realized i could overwrite LSB byte at `rsp - 0x10` to point to flag :/
-![[yet_another_fsb_2.png]]
+![](../image/yet_another_fsb_2.png)
 - and bc stack addr is random, so we need to brute force to get correct addr w rate 1/16
-![[yet_another_fsb_3.png]]
+![](../image/yet_another_fsb_3.png)
 - now we can perform arbitrary write. i use `%p` to leak as padding too
 ```python
 p = None
