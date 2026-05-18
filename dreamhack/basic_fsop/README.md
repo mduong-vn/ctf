@@ -180,7 +180,7 @@ fp->_wide_data->_wide_vtable->__doallocate = [[[stdout+0x20]+0xe0]+0x68] = &win
 - i think `win` can be placed anywhere, here i put it at `stdout->_markers`, so `[stdout+0x60]` = `[[[stdout+0x20]+0xd8]+0x68]` = `[[stdout-XXX+0xe0]+0x68]` = `&win` -> `[stdout-XXX+0xe0] = stdout-0x8`
 - same as `win`, `XXX` (mayb?) can be any values btw 0x78 and 0xe0, as long as `[stdout-XXX+0xe0]` hasn't held any values
 - here i chose `XXX=0xe0`, which means `[stdout]` or `[stdout->_flags] = stdout-0x8`
-  ![](../image/Pasted image 20260517011300.png)
+  ![](../image/basic_fsop.png)
 - now it calls `fp->_wide_data->_wide_vtable->__doallocate(fp)` and triggers `win`!
 
 -> overall, since we have `win`, can leak libc addr and overwrite stdout directly until `_chains`, the path will be:
